@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+PlexAPI
+jinja2
+python-multipart
+requests
+python-dotenv
+requests
+cloudscraper
+beautifulsoup4
+lxml

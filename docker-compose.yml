@@ -1,0 +1,13 @@
+services:
+  syncplex:
+    build: .
+    container_name: syncplex
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./downloads:/downloads  
+      #  Or if you want to bind your plex folders directly
+      #- /data/plex/movies/:/downloads/movies
+      #- /data/plex/tvshows/:/downloads/tvshows
+    env_file: .env
+    restart: unless-stopped

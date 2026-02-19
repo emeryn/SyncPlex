@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYNCPLEX</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.net.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root { --plex-bg: #1f2326; --plex-panel: #282a2d; --plex-orange: #e5a00d; --plex-text: #e5e5e5; }
+        
+        body { 
+            background-color: #121725; 
+            background-image: url('https://images.unsplash.com/photo-1614850523459-c2f4c699c52e?q=80&w=2560&auto=format&fit=crop');
+            background-size: cover; background-position: center; background-attachment: fixed;
+            color: var(--plex-text); font-family: 'Inter', sans-serif; 
+        }
+        .app-overlay { position: fixed; inset: 0; background: rgba(15, 17, 20, 0.85); z-index: -1; backdrop-filter: blur(5px); }
+        
+        /* TMDB STYLES */
+        .tmdb-section { overflow-x: auto; display: flex; gap: 15px; padding-bottom: 20px; }
+        .tmdb-section::-webkit-scrollbar { height: 8px; background: #282a2d; }
+        .tmdb-section::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        .tmdb-card { min-width: 140px; width: 140px; position: relative; cursor: pointer; transition: transform 0.2s; }
+        .tmdb-card:hover { transform: scale(1.05); z-index: 10; }
+        .tmdb-img { width: 100%; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        .tmdb-date { position: absolute; top: 5px; right: 5px; background: rgba(0,0,0,0.8); color: #e5a00d; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+
+        /* SIDEBAR */
+        #sidebar { background-color: rgba(40, 42, 45, 0.95); backdrop-filter: blur(10px); transition: width 0.3s; border-right: 1px solid rgba(255,255,255,0.05); }
+        .nav-item.active { border-left: 3px solid var(--plex-orange); background-color: rgba(255,255,255,0.05); font-weight: 600; }
+        .collapsed { width: 70px !important; }
+        .collapsed .sidebar-text, .collapsed .logo-text, .collapsed .storage-panel { display: none; }
+        .collapsed .logo-container { justify-content: center; padding: 0; }
+        .collapsed .logo-img { margin: 0; transform: scale(1.2); }
+        
+        .poster-card { background-color: #2b2e32; border-radius: 4px; transition: transform 0.2s, box-shadow 0.2s; overflow: hidden; position: relative; aspect-ratio: 2 / 3; }
+        .poster-card:hover { transform: scale(1.02); box-shadow: 0 0 0 3px var(--plex-orange); z-index: 10; }
+        .selected-card { box-shadow: 0 0 0 3px var(--plex-orange) !important; opacity: 0.8; }
+        .lib-card { aspect-ratio: 16/9; background-size: cover; background-position: center; border-radius: 12px; position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        .lib-card:hover { transform: scale(1.03) translateY(-2px); border-color: var(--plex-orange); box-shadow: 0 10px 30px rgba(229, 160, 13, 0.2); }
+        .lib-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.2)); transition: background 0.3s; }
+        .lib-card:hover .lib-overlay { background: linear-gradient(to top, rgba(0,0,0,0.95), rgba(0,0,0,0.4)); }
+        
+        .card-actions { position: absolute; inset: 0; background: rgba(0,0,0,0.85); opacity: 0; transition: opacity 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 20; backdrop-filter: blur(2px); }
+        .poster-card:hover .card-actions { opacity: 1; }
+        .action-row { display: flex; gap: 10px; }
+        .action-btn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; transition: transform 0.2s; cursor: pointer; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.6); }
+        .action-btn:hover { transform: scale(1.1); background: black; border-color: var(--plex-orange); color: var(--plex-orange); }
+        .btn-sync:hover { border-color: #e5a00d; color: #e5a00d; }
+        .btn-dl:hover { border-color: #3b82f6; color: #3b82f6; }
+        
+        .check-circle { position: absolute; top: 10px; left: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--plex-orange); color: black; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(0,0,0,0.5); z-index: 30; }
+        .server-badge { position: absolute; top: 10px; right: 10px; width: 24px; height: 24px; border-radius: 50%; overflow: hidden; border: 1px solid rgba(255,255,255,0.5); z-index: 15; box-shadow: 0 2px 5px black; }
+        .plex-input { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; }
+        .plex-input:focus { border-color: var(--plex-orange); outline: none; }
+        
+        .file-table { w-full text-left border-collapse collapse; table-layout: fixed; } 
+        .file-row:hover { background-color: rgba(255,255,255,0.05); }
+        .file-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: rgba(255,255,255,0.05); color: #ccc; flex-shrink: 0; }
+        
+        #toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+        .toast { pointer-events: auto; background: #333; color: white; border-left: 4px solid var(--plex-orange); padding: 12px 20px; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px; min-width: 300px; transform: translateX(120%); transition: all 0.3s; opacity: 0; }
+        .toast.show { transform: translateX(0); opacity: 1; }
+        #fab-bar { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(200%); background: var(--plex-orange); color: black; padding: 12px 30px; border-radius: 50px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; gap: 15px; align-items: center; z-index: 50; transition: all 0.3s; font-weight: bold; cursor: pointer; border: 1px solid #ffffff20; }
+        ::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-track { background: #1f2326; } ::-webkit-scrollbar-thumb { background: #3f4245; border-radius: 5px; }
+  
+        @media (max-width: 768px) {
+            .text-\\[8px\\] { font-size: 11px !important; }
+            .text-\\[9px\\] { font-size: 12px !important; }
+            .text-\\[10px\\] { font-size: 13px !important; }
+            .text-xs { font-size: 14px !important; }
+            main > .p-8 { padding: 1rem !important; }
+            
+            .action-btn { width: 50px !important; height: 50px !important; font-size: 20px !important; }
+            .card-actions { gap: 16px !important; } 
+            
+            .grid { gap: 0.5rem !important; }
+            
+            #sidebar { 
+                position: fixed !important; 
+                height: 100%; 
+                z-index: 100; 
+                width: 75% !important; 
+                max-width: 300px;
+                transform: translateX(-100%); 
+                transition: transform 0.3s ease-in-out;
+            }
+            #sidebar.mobile-open { transform: translateX(0); }
+            
+            .md\\:flex-row { flex-direction: column !important; }
+            #info-modal .w-full.md\\:w-1\\/3 { height: 250px; } 
+            #info-modal .w-full.md\\:w-2\\/3 { padding: 1rem !important; }
+        }
+  
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden text-sm">
+    <div id="vanta-bg" class="fixed inset-0 z-[-2]"></div>
+    <div class="app-overlay"></div>
+    <div id="toast-container"></div>
+    <div id="fab-bar" onclick="actionSelected()">
+        <span id="fab-action-text"><i class="fa-solid fa-cloud-arrow-down"></i> SYNC TO SERVER</span>
+        <span id="selected-count" class="bg-black text-[#e5a00d] rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold">0</span>
+    </div>
+    <button onclick="toggleMobileMenu()" class="md:hidden fixed top-4 right-4 z-50 bg-[#282a2d]/90 p-3 rounded-full border border-white/10 shadow-xl text-white backdrop-blur-sm">
+        <i class="fa-solid fa-bars text-lg"></i>
+    </button>
+
+    <div id="mobile-overlay" onclick="toggleMobileMenu()" class="hidden fixed inset-0 bg-black/80 z-[90] backdrop-blur-sm transition-opacity"></div>
+        
+    <aside id="sidebar" class="w-64 flex flex-col z-20 relative shadow-xl justify-between flex-shrink-0">
+        <div>
+            <div class="h-16 flex items-center px-5 border-b border-white/5 overflow-hidden logo-container transition-all">
+                <img src="/static/logo.png" alt="Logo" class="h-8 w-8 object-contain mr-3 logo-img transition-transform">
+                <div class="logo-text font-bold text-lg tracking-wider"><span class="text-[#3b82f6]">SYNC</span><span class="text-[#e5a00d]">PLEX</span></div>
+            </div>
+            <nav class="flex-1 py-4 space-y-1">
+                <button onclick="showPage('servers')" id="nav-servers" class="nav-item w-full text-left px-5 py-3 flex items-center gap-4"><i class="fa-solid fa-server w-5 text-center"></i> <span class="sidebar-text">Servers</span></button>
+                <button onclick="showPage('recent')" id="nav-recent" class="nav-item w-full text-left px-5 py-3 flex items-center gap-4"><i class="fa-solid fa-clock-rotate-left w-5 text-center"></i> <span class="sidebar-text">Recently Added</span></button>
+                <button onclick="showPage('downloads')" id="nav-downloads" class="nav-item w-full text-left px-5 py-3 flex items-center gap-4"><i class="fa-solid fa-cloud-arrow-down w-5 text-center"></i> <span class="sidebar-text">Sync Queue</span></button>
+                <button onclick="showPage('files')" id="nav-files" class="nav-item w-full text-left px-5 py-3 flex items-center gap-4 text-gray-400 hover:text-white"><i class="fa-solid fa-folder-open w-5 text-center"></i> <span class="sidebar-text">Files & Space</span></button>
+                <button onclick="showPage('tmdb')" id="nav-tmdb" class="nav-item w-full text-left px-5 py-3 flex items-center gap-4 text-[#01b4e4] hover:bg-white/5"><i class="fa-solid fa-film w-5 text-center"></i> <span class="sidebar-text">TMDB discovery</span></button>
+                <button onclick="showPage('wawa')" id="nav-wawa" class="nav-item w-full text-left px-5 py-3 flex items-center gap-4 text-purple-400 hover:bg-white/5">
+                    <i class="fa-solid fa-cloud-arrow-down w-5 text-center"></i> 
+                    <span class="sidebar-text">WawaCity Crawler</span>
+                </button>
+            </nav>
+        </div>
+        <div class="bg-[#1a1d20]/80 backdrop-blur-md border-t border-white/5">
+            <div class="storage-panel p-4 pb-2"><div class="flex justify-between text-xs text-gray-400 mb-1"><span>Storage</span><span id="storage-text">Loading...</span></div><div class="w-full bg-[#3f4245] h-1.5 rounded-full overflow-hidden"><div id="storage-bar" class="bg-[#3b82f6] h-full transition-all duration-500" style="width: 0%"></div></div></div>
+            <div class="p-3 flex justify-center"><button onclick="toggleSidebar()" class="text-[#999] hover:text-white p-2"><i class="fa-solid fa-bars" id="toggle-icon"></i></button></div>
+        </div>
+    </aside>
+
+    <main class="flex-1 overflow-y-auto relative bg-transparent scroll-smooth w-full">
+        <div id="top-bar" class="sticky top-0 z-30 bg-[#1f2326]/80 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-white/5 hidden shadow-sm">
+            <div class="flex items-center gap-3 text-gray-400"><button onclick="showPage('servers')" class="hover:text-white transition"><i class="fa-solid fa-arrow-left"></i></button><span id="crumb-server" class="text-white font-bold">Library</span></div>
+            <div class="flex gap-4 items-center">
+                <button id="btn-select-all" onclick="selectAll()" class="hidden text-xs text-[#e5a00d] font-bold uppercase tracking-wide hover:text-white transition">Select All</button>
+<input type="text" 
+       id="searchInput" 
+       placeholder="Rechercher un titre..." 
+       class="plex-input rounded-full px-4 py-1.5 pl-9 text-sm w-48 focus:w-64 transition-all placeholder-gray-500" 
+       onkeypress="handleSearch(event)">
+
+                <div class="flex gap-2 items-center text-gray-400"><i class="fa-solid fa-arrow-down-wide-short"></i><select id="sortField" onchange="reloadLibrary()" class="bg-transparent outline-none cursor-pointer hover:text-white"><option value="addedAt">Date Added</option><option value="title">Title</option><option value="year">Year</option></select><select id="sortDir" onchange="reloadLibrary()" class="bg-transparent outline-none cursor-pointer hover:text-white"><option value="desc">Desc</option><option value="asc">Asc</option></select></div>
+            </div>
+        </div>
+
+        <div class="p-8">
+            <div id="page-servers" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 hidden"></div>
+            <div id="page-recent" class="hidden"><h2 class="text-2xl font-bold text-white mb-6 flex items-center gap-2 drop-shadow-lg"><i class="fa-solid fa-clock-rotate-left text-[#3b82f6]"></i> Recently Added</h2><div id="global-dashboard" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4"></div></div>
+            <div id="page-tmdb" class="hidden pb-24"><div id="tmdb-content"></div></div>
+            <div id="page-wawa" class="hidden pb-24">
+                <div class="flex justify-between items-center mb-8">
+                    <h2 class="text-2xl font-bold text-white drop-shadow-lg flex items-center gap-3">
+                        <span class="text-purple-500 bg-purple-500/10 p-2 rounded-lg border border-purple-500/20"><i class="fa-solid fa-magnet"></i></span> 
+                        WawaCity Explorer
+                    </h2>
+                    
+                    <button onclick="loadWawa()" class="group flex items-center gap-2 text-gray-400 hover:text-white text-xs uppercase font-bold px-4 py-2 border border-white/10 rounded-full hover:bg-purple-600 hover:border-purple-500 transition-all shadow-lg">
+                        <i class="fa-solid fa-rotate-right group-hover:animate-spin"></i> Refresh
+                    </button>
+                </div>
+
+                <div id="wawa-container" class="space-y-12"></div>
+            </div>
+            <div id="dynamic-content" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4 hidden pb-24"></div>
+            <div id="page-downloads" class="hidden max-w-5xl mx-auto">
+                <div class="flex justify-between items-center mb-6"><h2 class="text-2xl font-bold text-white drop-shadow-lg">Transfer Queue (Server)</h2></div>
+                <div class="grid grid-cols-12 text-xs text-[#999] font-bold uppercase tracking-wider mb-2 px-4"><div class="col-span-6">Item</div><div class="col-span-2">Status</div><div class="col-span-4">Progress</div></div>
+                <div id="download-list" class="space-y-2"></div>
+            </div>
+            <div id="page-files" class="hidden w-full max-w-[95%] mx-auto">
+                <div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-bold text-white drop-shadow-lg flex items-center gap-3"><i class="fa-solid fa-hard-drive text-[#e5a00d]"></i> Disk Manager</h2><button onclick="loadFiles(currentPath)" class="text-gray-400 hover:text-white"><i class="fa-solid fa-rotate-right"></i> Refresh</button></div>
+                <div class="bg-[#282a2d] border border-white/10 rounded-t-lg p-3 flex items-center gap-2 text-sm text-gray-300 overflow-x-auto"><button onclick="loadFiles('')" class="hover:text-white font-bold"><i class="fa-solid fa-house"></i> Root</button><div id="breadcrumb" class="flex items-center gap-2"></div></div>
+                <div class="bg-[#282a2d]/90 backdrop-blur rounded-b-lg border border-t-0 border-white/5 overflow-x-auto">
+                    <table class="w-full text-left border-collapse min-w-[800px]"><thead class="bg-black/20 text-xs uppercase text-gray-400 font-semibold select-none"><tr><th class="p-4 w-12 text-center"><input type="checkbox" onclick="toggleAllFiles(this)" class="cursor-pointer"></th><th class="p-4 cursor-pointer hover:text-white transition group w-auto" onclick="sortFiles('name')">Name <span id="sort-icon-name" class="ml-1 opacity-30 group-hover:opacity-100"><i class="fa-solid fa-sort"></i></span></th><th class="p-4 w-28 whitespace-nowrap cursor-pointer hover:text-white transition group" onclick="sortFiles('type')">Type <span id="sort-icon-type" class="ml-1 opacity-30 group-hover:opacity-100"><i class="fa-solid fa-sort"></i></span></th><th class="p-4 w-32 text-right whitespace-nowrap cursor-pointer hover:text-white transition group" onclick="sortFiles('size')">Size <span id="sort-icon-size" class="ml-1 opacity-30 group-hover:opacity-100"><i class="fa-solid fa-sort"></i></span></th><th class="p-4 w-24 text-right">Action</th></tr></thead><tbody id="files-list" class="divide-y divide-white/5 text-sm text-gray-300"></tbody></table>
+                </div>
+                <div id="files-empty" class="hidden text-center py-12 text-gray-500 italic">Folder is empty.</div>
+            </div>
+        </div>
+    </main>
+
+    <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center z-[120]"><div class="bg-[#282a2d] w-full max-w-md p-8 rounded-xl shadow-2xl border border-white/10 transform scale-100 transition-all flex flex-col items-center text-center"><div class="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-6 ring-1 ring-red-500/50"><i class="fa-solid fa-trash-can text-3xl text-red-500"></i></div><h3 class="text-2xl font-bold text-white mb-2">Delete Items?</h3><p id="confirm-msg" class="text-gray-400 mb-8 leading-relaxed">Are you sure you want to delete these files? This action cannot be undone.</p><div class="flex gap-4 w-full"><button onclick="closeConfirmModal()" class="flex-1 px-5 py-3 rounded-lg bg-white/5 hover:bg-white/10 text-white font-semibold transition border border-white/5">Cancel</button><button id="confirm-btn-yes" class="flex-1 px-5 py-3 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold transition shadow-lg shadow-red-900/20">Delete</button></div></div></div>
+    
+    <div id="info-modal" class="fixed inset-0 bg-black/90 backdrop-blur-sm hidden flex items-center justify-center z-[110] p-4">
+        <div class="bg-[#282a2d] w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden border border-white/10 relative flex flex-col md:flex-row max-h-[90vh]">
+            <button onclick="closeInfo()" class="absolute top-4 right-4 z-20 text-white/50 hover:text-white bg-black/50 hover:bg-black/80 rounded-full w-8 h-8 flex items-center justify-center backdrop-blur-md"><i class="fa-solid fa-times"></i></button>
+            <div class="w-full md:w-1/3 bg-black relative"><img id="info-thumb" class="w-full h-full object-cover opacity-80" src=""><div class="absolute inset-0 bg-gradient-to-t from-[#282a2d] via-transparent to-transparent md:bg-gradient-to-r"></div></div>
+            <div class="w-full md:w-2/3 p-8 flex flex-col overflow-y-auto">
+                
+                <div class="flex items-start justify-between mb-1">
+                    <h2 id="info-title" class="text-3xl font-bold text-white leading-tight">Title</h2>
+                    <div id="info-langs" class="flex flex-wrap gap-1 justify-end"></div>
+                </div>
+
+                <div class="flex gap-3 text-sm text-gray-400 mb-4">
+                    <span id="info-year"></span> • <span id="info-res" class="text-[#e5a00d] font-bold"></span> • <span id="info-size"></span>
+                </div>
+                
+
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Summary</h3>
+                <p id="info-summary" class="text-gray-300 text-sm leading-relaxed mb-6"></p>
+                
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Cast</h3>
+                <div id="info-cast" class="flex flex-wrap gap-2 mb-6"></div>
+                
+                <div class="mt-auto pt-6 border-t border-white/10 flex gap-3">
+                    <button id="info-dl-btn" class="flex-1 bg-[#e5a00d] hover:bg-[#c4890b] text-black font-bold py-2 px-4 rounded flex items-center justify-center gap-2 transition"><i class="fa-solid fa-cloud-arrow-down"></i> Sync</button>
+                    <button id="info-dl-pc-btn" class="bg-[#3b82f6] hover:bg-[#2563eb] text-white font-bold py-2 px-4 rounded flex items-center justify-center gap-2 transition"><i class="fa-solid fa-laptop-file"></i> PC</button>
+                    <button id="info-play-btn" class="bg-[#333] hover:bg-[#444] text-white font-bold py-2 px-4 rounded flex items-center justify-center gap-2 transition"><i class="fa-solid fa-play"></i></button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="video-modal" class="fixed inset-0 bg-black/95 backdrop-blur-sm hidden flex flex-col items-center justify-center z-[100]"><div class="w-full max-w-5xl aspect-video bg-black rounded shadow-2xl relative"><video id="video-player" class="w-full h-full" controls autoplay></video><button onclick="closeVideo()" class="absolute -top-10 right-0 text-gray-400 hover:text-white text-xl"><i class="fa-solid fa-times"></i> Close</button></div></div>
+    <div id="conn-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center z-50"><div class="bg-[#282a2d] p-6 rounded shadow-2xl w-full max-w-lg border border-[#ffffff10]"><div class="flex justify-between items-center mb-6 border-b border-[#ffffff10] pb-4"><h3 class="text-lg font-bold text-[#e5a00d]">Select Connection</h3><button onclick="closeModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button></div><div id="conn-list" class="space-y-2 mb-4 max-h-[50vh] overflow-y-auto pr-2"></div></div></div>
+
+    <script>
+        let currentServerId = null, currentSectionId = null;
+        let selectedKeys = new Set(), allCurrentKeys = [];
+        let isSidebarCollapsed = false;
+        window.itemsCache = {}; 
+        
+        let currentPath = "", selectedFilePaths = new Set();
+        let currentFilesList = []; 
+        let currentSort = { col: 'name', asc: true };
+
+        function showPage(page) {
+            const pages = ['page-recent', 'page-servers', 'dynamic-content', 'page-downloads', 'page-files', 'page-tmdb', 'page-wawa'];
+            pages.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.add('hidden');
+            });
+            document.getElementById('top-bar').classList.add('hidden');
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            
+            if(page==='servers') { loadServers(); document.getElementById('page-servers').classList.remove('hidden'); document.getElementById('nav-servers').classList.add('active'); }
+            if(page==='recent') { document.getElementById('page-recent').classList.remove('hidden'); document.getElementById('nav-recent').classList.add('active'); loadGlobalDashboard(); }
+            if(page==='downloads') { document.getElementById('page-downloads').classList.remove('hidden'); updateDownloads(); document.getElementById('nav-downloads').classList.add('active'); }
+            if(page==='files') { document.getElementById('page-files').classList.remove('hidden'); document.getElementById('nav-files').classList.add('active'); loadFiles(currentPath); }
+            if(page==='tmdb') { 
+                    document.getElementById('page-tmdb').classList.remove('hidden'); 
+                    document.getElementById('nav-tmdb').classList.add('active'); 
+                    loadTmdb(); 
+                }     
+            if(page==='wawa') { 
+                    document.getElementById('page-wawa').classList.remove('hidden'); 
+                    document.getElementById('nav-wawa').classList.add('active'); 
+                    loadWawa(); 
+                }       
+            resetSelection();
+            updateStorage(); 
+        }
+
+        async function downloadDirect(e, serverId, key) {
+             e.stopPropagation();
+             try {
+                 const res = await fetch(`/api/server/${serverId}/direct_link?media_key=${key}&stream=false`);
+                 const data = await res.json();
+                 const link = document.createElement('a');
+                 link.href = data.url;
+                 link.setAttribute('download', ''); 
+                 document.body.appendChild(link);
+                 link.click();
+                 document.body.removeChild(link);
+                 showToast("Download started in browser");
+             } catch(e) { showToast("Error getting link", "error"); }
+        }
+
+function renderCard(i, server) { 
+            if(!window.itemsCache[i.key]) window.itemsCache[i.key] = i; 
+            const sId = server ? (server.id || server._id) : currentServerId; 
+            
+            let langOverlay = '';
+            if (i.languages && i.languages.length > 0 && i.languages[0] !== "---") {
+                langOverlay = `
+                <div style="position: absolute; top: 8px; left: 8px; z-index: 40; pointer-events: none;">
+                    <span style="background-color: #e5a00d; color: black; font-weight: 900; font-size: 9px; padding: 2px 5px; border-radius: 3px; text-transform: uppercase; box-shadow: 0 2px 4px rgba(0,0,0,0.5);">
+                        ${i.languages[0]}
+                    </span>
+                </div>`;
+            }
+
+            let resBadge = '';
+            if (i.resolution) {
+                let resText = i.resolution.toUpperCase();
+                resBadge = `
+                <div style="position: absolute; top: 8px; right: 8px; z-index: 40; pointer-events: none;">
+                    <span style="background-color: #3b82f6; color: white; font-weight: 900; font-size: 9px; padding: 2px 5px; border-radius: 3px; text-transform: uppercase; box-shadow: 0 2px 4px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1);">
+                        ${resText}
+                    </span>
+                </div>`;
+            }
+
+            const sName = server ? server.name : '';
+            const avatarUrl = sName ? `https://ui-avatars.com/api/?name=${encodeURIComponent(sName)}&background=1f2326&color=e5a00d&size=64&bold=true` : ''; 
+            const realIconUrl = sId ? `/api/server/${sId}/icon` : ''; 
+            const serverBadge = server ? `<div class="server-badge bg-black" style="top: 35px !important;" title="${sName}"><img src="${realIconUrl}" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='${avatarUrl}';"></div>` : ''; 
+
+            let buttons = (i.type !== 'show') ? `
+                <div class="action-row">
+                    <button onclick="playVideo(event, '${sId}', '${i.key}')" class="action-btn"><i class="fa-solid fa-play"></i></button>
+                    <button onclick="openInfo(event, '${i.key}')" class="action-btn"><i class="fa-solid fa-info"></i></button>
+                </div>
+                <div class="action-row mt-2">
+                    <button onclick="downloadOne(event, '${sId}', '${i.key}')" class="action-btn btn-sync"><i class="fa-solid fa-cloud-arrow-down"></i></button>
+                </div>` : `
+                <div class="action-row">
+                    <button onclick="browseShow('${sId}', '${i.key}')" class="action-btn"><i class="fa-solid fa-folder-open"></i></button>
+                </div>`;
+
+            return `
+            <div id="card-${sId}-${i.key}" class="poster-card group">
+                <div class="w-full h-full bg-[#111] bg-cover bg-center transition duration-500 group-hover:scale-110" style="background-image: url('${i.thumb||''}');"></div>
+                
+                ${langOverlay}
+                ${resBadge}
+                ${serverBadge}
+                
+                <div class="check-circle hidden"><i class="fa-solid fa-check"></i></div>
+                <div class="card-actions">${buttons}</div>
+                <div class="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/90 to-transparent flex flex-col justify-end p-3 pointer-events-none">
+                    <div class="font-bold truncate text-sm text-white drop-shadow-md leading-tight">${i.title}</div>
+                    <div class="text-[11px] text-[#ccc] mt-0.5">
+                        <span>${i.type==='show' ? 'Série' : i.year}</span>
+                    </div>
+                </div>
+            </div>`; 
+        }
+
+        function toggleMobileMenu() {
+            document.getElementById('sidebar').classList.toggle('mobile-open');
+            document.getElementById('mobile-overlay').classList.toggle('hidden');
+        }
+
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                if(window.innerWidth <= 768) toggleMobileMenu();
+            });
+        });
+
+        function openInfo(e, key) { 
+            e.stopPropagation(); 
+            const item = window.itemsCache[key]; if(!item) return; 
+            
+            document.getElementById('info-title').innerText = item.title; 
+            document.getElementById('info-year').innerText = item.year; 
+            document.getElementById('info-res').innerText = item.resolution || 'UNK'; 
+            document.getElementById('info-size').innerText = formatBytes(item.size); 
+            document.getElementById('info-summary').innerText = item.summary || "No description available."; 
+            document.getElementById('info-thumb').src = item.thumb || ''; 
+            
+            const langContainer = document.getElementById('info-langs');
+                        langContainer.innerHTML = ''; 
+                        
+                        if (item.languages && item.languages.length > 0 && item.languages[0] !== "---") {
+                            item.languages.forEach(lang => {
+                                const badge = document.createElement('span');
+                                badge.className = "bg-[#e5a00d] text-black text-[10px] font-bold px-2 py-0.5 rounded border border-black/10 shadow-sm uppercase";
+                                badge.innerText = lang;
+                                langContainer.appendChild(badge);
+                            });
+                        }          
+            const castDiv = document.getElementById('info-cast'); 
+            if(item.cast && item.cast.length > 0) castDiv.innerHTML = item.cast.map(c => `<span class="bg-black/40 px-3 py-1 rounded-full text-xs text-gray-300 border border-white/5">${c}</span>`).join(''); 
+            else castDiv.innerHTML = '<span class="text-gray-600 italic text-xs">No cast info</span>'; 
+            
+            const serverId = item._server ? item._server.id : currentServerId; 
+            
+            const syncBtn = document.getElementById('info-dl-btn');
+            if(syncBtn) syncBtn.onclick = (ev) => { downloadOne(ev, serverId, item.key); closeInfo(); }; 
+            
+            const pcBtn = document.getElementById('info-dl-pc-btn');
+            if(pcBtn) {
+                if(item.type !== 'show') {
+                    pcBtn.style.display = 'flex';
+                    pcBtn.onclick = (ev) => { downloadDirect(ev, serverId, item.key); closeInfo(); };
+                } else {
+                    pcBtn.style.display = 'none';
+                }
+            }
+
+            const playBtn = document.getElementById('info-play-btn');
+            if(playBtn) {
+                playBtn.onclick = (ev) => { playVideo(ev, serverId, item.key); closeInfo(); }; 
+                playBtn.style.display = item.type === 'show' ? 'none' : 'flex'; 
+            }
+            
+            document.getElementById('info-modal').classList.remove('hidden'); 
+        }
+
+        function closeInfo() { document.getElementById('info-modal').classList.add('hidden'); }
+        async function loadFiles(path = "") { currentPath = path; updateBreadcrumb(path); const tbody = document.getElementById('files-list'); tbody.innerHTML = '<tr><td colspan="5" class="p-8 text-center text-gray-500"><i class="fa-solid fa-circle-notch fa-spin"></i> Loading...</td></tr>'; try { const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`); const json = await res.json(); currentFilesList = json.data; applySort(); renderFilesTable(); } catch(e) { showToast("Error files", "error"); } }
+        function sortFiles(col) { if (currentSort.col === col) currentSort.asc = !currentSort.asc; else { currentSort.col = col; currentSort.asc = (col === 'size') ? false : true; } applySort(); renderFilesTable(); }
+        function applySort() { const {col, asc} = currentSort; const mult = asc ? 1 : -1; currentFilesList.sort((a, b) => { let valA = a[col], valB = b[col]; if (col === 'name') { valA = valA.toLowerCase(); valB = valB.toLowerCase(); } if (valA < valB) return -1 * mult; if (valA > valB) return 1 * mult; return 0; }); updateSortIcons(); }
+        function updateSortIcons() { ['name', 'type', 'size'].forEach(c => { const el = document.getElementById(`sort-icon-${c}`); el.innerHTML = '<i class="fa-solid fa-sort"></i>'; el.classList.add('opacity-30'); el.parentElement.classList.remove('text-[#e5a00d]'); }); const activeEl = document.getElementById(`sort-icon-${currentSort.col}`); activeEl.innerHTML = currentSort.asc ? '<i class="fa-solid fa-sort-up"></i>' : '<i class="fa-solid fa-sort-down"></i>'; activeEl.classList.remove('opacity-30'); activeEl.parentElement.classList.add('text-[#e5a00d]'); }
+        function renderFilesTable() { const tbody = document.getElementById('files-list'); tbody.innerHTML = ''; if (currentPath !== "") tbody.innerHTML += `<tr class="file-row hover:bg-white/5 cursor-pointer" onclick="loadFiles('${currentPath.includes('/') ? currentPath.substring(0, currentPath.lastIndexOf('/')) : ""}')"><td class="p-4 text-center"></td><td class="p-4 flex items-center gap-3 font-bold text-[#e5a00d]"><div class="file-icon bg-transparent"><i class="fa-solid fa-turn-up"></i></div>.. (Parent Directory)</td><td colspan="3"></td></tr>`; if(currentFilesList.length === 0 && currentPath === "") { document.getElementById('files-empty').classList.remove('hidden'); return; } else document.getElementById('files-empty').classList.add('hidden'); currentFilesList.forEach(f => { let icon = f.type === 'folder' ? 'fa-folder text-[#e5a00d]' : (f.type === 'video' ? 'fa-film text-blue-400' : 'fa-file text-gray-500'); let clickAction = f.type === 'folder' ? `loadFiles('${f.rel_path}')` : ''; let cursorClass = f.type === 'folder' ? 'cursor-pointer font-bold text-white' : 'text-gray-300'; let checked = selectedFilePaths.has(f.path) ? 'checked' : ''; tbody.innerHTML += `<tr class="file-row group transition-colors hover:bg-white/5"><td class="p-4 text-center"><input type="checkbox" onchange="toggleFileSelection('${f.path}')" class="file-chk cursor-pointer" ${checked}></td><td class="p-4 ${cursorClass} overflow-hidden max-w-0 w-full" onclick="${clickAction}"><div class="flex items-center gap-3"><div class="file-icon flex-shrink-0"><i class="fa-solid ${icon}"></i></div><span class="truncate" title="${f.name}">${f.name}</span></div></td><td class="p-4 text-gray-400 text-xs uppercase whitespace-nowrap">${f.type}</td><td class="p-4 text-right font-mono text-gray-300 whitespace-nowrap">${formatBytes(f.size)}</td><td class="p-4 text-right"><button onclick="deleteFiles(['${f.path}'])" class="text-gray-500 hover:text-red-500 transition px-2 py-1"><i class="fa-solid fa-trash"></i></button></td></tr>`; }); }
+        function updateBreadcrumb(path) { const container = document.getElementById('breadcrumb'); if (!path) { container.innerHTML = ""; return; } const parts = path.split('/'); let accumPath = "", html = ""; parts.forEach((part, index) => { accumPath += (index > 0 ? "/" : "") + part; html += `<span class="text-gray-600">/</span>`; html += index === parts.length - 1 ? `<span class="text-white font-semibold">${part}</span>` : `<button onclick="loadFiles('${accumPath}')" class="hover:text-white hover:underline">${part}</button>`; }); container.innerHTML = html; }
+        function toggleFileSelection(path) { if(selectedFilePaths.has(path)) selectedFilePaths.delete(path); else selectedFilePaths.add(path); updateFab(); }
+        function toggleAllFiles(source) { document.querySelectorAll('.file-chk').forEach(b => { const path = b.getAttribute('onchange').match(/'(.*)'/)[1]; if(source.checked) selectedFilePaths.add(path); else selectedFilePaths.delete(path); b.checked = source.checked; }); updateFab(); }
+        function deleteFiles(paths) { openConfirmModal(`Permanently delete ${paths.length} item(s)?`, async () => { try { await fetch('/api/files/delete', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paths: paths})}); showToast("Deleted"); paths.forEach(p => selectedFilePaths.delete(p)); updateFab(); loadFiles(currentPath); updateStorage(); } catch(e) { showToast("Error deleting", "error"); } }); }
+        function openConfirmModal(msg, onConfirm) { document.getElementById('confirm-msg').innerText = msg; const btn = document.getElementById('confirm-btn-yes'); const newBtn = btn.cloneNode(true); btn.parentNode.replaceChild(newBtn, btn); newBtn.onclick = () => { onConfirm(); closeConfirmModal(); }; document.getElementById('confirm-modal').classList.remove('hidden'); }
+        function closeConfirmModal() { document.getElementById('confirm-modal').classList.add('hidden'); }
+        function actionSelected() { if(!document.getElementById('page-files').classList.contains('hidden')) { if(selectedFilePaths.size > 0) deleteFiles(Array.from(selectedFilePaths)); } else { downloadSelected(); } }
+        function updateFab() { const fab = document.getElementById('fab-bar'); const isFilePage = !document.getElementById('page-files').classList.contains('hidden'); const count = isFilePage ? selectedFilePaths.size : selectedKeys.size; document.getElementById('selected-count').innerText = count; if(isFilePage) { document.getElementById('fab-action-text').innerHTML = '<i class="fa-solid fa-trash"></i> DELETE'; fab.className = "fixed bottom-[30px] left-1/2 transform -translate-x-1/2 px-8 py-3 rounded-full shadow-2xl flex gap-4 items-center z-50 transition-all duration-300 font-bold cursor-pointer border border-white/20 bg-red-600 text-white"; } else { document.getElementById('fab-action-text').innerHTML = '<i class="fa-solid fa-download"></i> DOWNLOAD'; fab.className = "fixed bottom-[30px] left-1/2 transform -translate-x-1/2 px-8 py-3 rounded-full shadow-2xl flex gap-4 items-center z-50 transition-all duration-300 font-bold cursor-pointer border border-white/20 bg-[#e5a00d] text-black"; } if(count > 0) fab.style.transform = "translateX(-50%) translateY(0)"; else fab.style.transform = "translateX(-50%) translateY(200%)"; }
+        function toggleSidebar() { isSidebarCollapsed = !isSidebarCollapsed; document.getElementById('sidebar').classList.toggle('collapsed'); }
+        function formatBytes(bytes, decimals = 1) { if (!+bytes) return ''; const k = 1024, i = Math.floor(Math.log(bytes) / Math.log(k)); return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`; }
+        function showToast(msg, type='success') { const t = document.createElement('div'); t.className = `toast border-l-4 ${type==='error'?'border-red-500':'border-[#e5a00d]'}`; t.innerHTML = `<span class="text-sm font-medium">${msg}</span>`; document.getElementById('toast-container').appendChild(t); requestAnimationFrame(()=>t.classList.add('show')); setTimeout(()=>{t.classList.remove('show'); setTimeout(()=>t.remove(),400)},3000); }
+        async function updateStorage() { try { const res = await fetch('/api/system/storage'); const data = await res.json(); document.getElementById('storage-text').innerText = `${formatBytes(data.free)} free`; document.getElementById('storage-bar').style.width = `${data.percent}%`; const bar = document.getElementById('storage-bar'); if(data.percent > 90) { bar.classList.remove('bg-[#3b82f6]'); bar.classList.add('bg-red-500'); } else { bar.classList.add('bg-[#3b82f6]'); bar.classList.remove('bg-red-500'); } } catch(e) {} }
+        function closeInfo() { document.getElementById('info-modal').classList.add('hidden'); }
+        async function loadGlobalDashboard() { const container = document.getElementById('global-dashboard'); container.innerHTML = '<div class="col-span-full text-center py-20 text-[#3b82f6]"><i class="fa-solid fa-circle-notch fa-spin text-4xl"></i><div class="mt-2 text-xs uppercase tracking-wide font-bold">Scanning...</div></div>'; try { const sRes = await fetch('/api/servers'); const servers = await sRes.json(); const promises = servers.map(s => fetch(`/api/server/${s.id}?section_id=recent`).then(r => r.json()).then(d => ({ server: s, items: d.data || [] })).catch(e => ({ server: s, items: [] }))); const results = await Promise.all(promises); let allItems = []; results.forEach(res => { res.items.forEach(item => { item._server = res.server; allItems.push(item); }); }); allItems.sort(() => Math.random() - 0.5); allItems.forEach(i => window.itemsCache[i.key] = i); container.innerHTML = allItems.length ? allItems.map(i => renderCard(i, i._server)).join('') : '<div class="col-span-full text-center text-gray-500">No content found.</div>'; } catch(e) { console.error(e); container.innerHTML = '<div class="text-red-500">Error loading content</div>'; } }
+        async function loadServers() { try { const res = await fetch('/api/servers'); const servers = await res.json(); const backdrops = ["https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=800&auto=format&fit=crop", "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=800&auto=format&fit=crop","https://images.unsplash.com/photo-1614850523459-c2f4c699c52e?q=80&w=800&auto=format&fit=crop","https://images.unsplash.com/photo-1604871000636-074fa5117945?q=80&w=800&auto=format&fit=crop","https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=800&auto=format&fit=crop"]; document.getElementById('page-servers').innerHTML = servers.map(s => { let badgeClass = s.forced_url ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'; let statusText = s.forced_url ? '<i class="fa-solid fa-link"></i> Relay' : '<i class="fa-solid fa-globe"></i> Auto'; const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name)}&background=1f2326&color=e5a00d&size=128&bold=true&length=1&font-size=0.5`; const realIconUrl = `/api/server/${s.id}/icon`; const bgImage = backdrops[s.name.charCodeAt(0) % backdrops.length]; return `<div class="relative group bg-[#282a2d] rounded-xl overflow-hidden border border-white/5 hover:border-[#3b82f6]/50 transition-all duration-300 hover:shadow-xl hover:shadow-black/50 hover:-translate-y-1 cursor-pointer" onclick="openServer('${s.id}', '${s.name}')"><div class="h-32 relative overflow-hidden"><div class="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-80" style="background-image: url('${bgImage}');"></div><div class="absolute inset-0 bg-gradient-to-t from-[#282a2d] via-[#282a2d]/40 to-transparent"></div></div><button onclick="event.stopPropagation(); openConnModal('${s.id}')" class="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 hover:bg-black/60 text-white/80 hover:text-white backdrop-blur-sm flex items-center justify-center transition border border-white/10 z-10"><i class="fa-solid fa-gear"></i></button><div class="absolute top-16 left-1/2 transform -translate-x-1/2"><div class="w-20 h-20 rounded-full border-4 border-[#282a2d] bg-[#1f2326] shadow-lg group-hover:scale-105 transition-transform overflow-hidden flex items-center justify-center"><img src="${realIconUrl}" alt="${s.name}" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='${avatarUrl}';"></div></div><div class="pt-10 pb-6 px-4 text-center relative z-10"><h3 class="text-xl font-bold text-white mb-2 group-hover:text-[#3b82f6] transition-colors truncate drop-shadow-md">${s.name}</h3><p class="text-sm text-gray-400 mb-4 flex items-center justify-center gap-2"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span></span> Online</p><div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-medium backdrop-blur-sm ${badgeClass}">${statusText}</div></div></div>`}).join(''); } catch(e) { showToast("Server error", 'error'); } }
+        async function openServer(id, name) { currentServerId = id; document.getElementById('page-servers').classList.add('hidden'); document.getElementById('dynamic-content').classList.remove('hidden'); document.getElementById('top-bar').classList.remove('hidden'); document.getElementById('crumb-server').innerText = name; document.getElementById('dynamic-content').innerHTML = '<div class="col-span-full h-64 flex flex-col items-center justify-center text-[#3b82f6]"><i class="fa-solid fa-circle-notch fa-spin text-5xl mb-4"></i><span class="text-white text-lg font-light tracking-widest uppercase">Connecting to ' + name + '</span></div>'; try { const res = await fetch(`/api/server/${id}`); const data = await res.json(); const imgMovies = "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop"; const imgShows = "https://images.unsplash.com/photo-1593784991095-a205069470b6?q=80&w=800&auto=format&fit=crop"; const imgOther = "https://images.unsplash.com/photo-1526554850534-7c78330d5f90?q=80&w=800&auto=format&fit=crop"; const container = document.getElementById('dynamic-content'); container.className = "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-24 animate-fade-in"; container.innerHTML = data.data.map(l => { let bgImg = l.type === 'movie' ? imgMovies : (l.type === 'show' ? imgShows : imgOther); let icon = l.type === 'movie' ? 'fa-film' : 'fa-tv'; let typeName = l.type === 'movie' ? 'Movies' : 'TV Shows'; return `<div onclick="openLibrary('${l.id}')" class="lib-card cursor-pointer group" style="background-image: url('${bgImg}');"><div class="lib-overlay"></div><div class="absolute inset-0 flex flex-col justify-end p-6 z-10"><div class="flex items-center gap-3 mb-1 transform translate-y-2 group-hover:translate-y-0 transition-transform duration-300"><div class="w-10 h-10 rounded-full bg-[#e5a00d] text-black flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform"><i class="fa-solid ${icon} text-lg"></i></div><div><h3 class="text-2xl font-bold text-white leading-none drop-shadow-md group-hover:text-[#e5a00d] transition-colors">${l.title}</h3><span class="text-xs text-gray-300 uppercase tracking-wider font-semibold opacity-0 group-hover:opacity-100 transition-opacity delay-75">${typeName} Library</span></div></div></div><div class="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div></div>`; }).join(''); } catch(e) { showToast("Library error", "error"); } }
+        const originalGridClass = "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4 hidden pb-24";
+        async function openLibrary(id) { currentSectionId = id; reloadLibrary(); }
+        async function reloadLibrary(parentKey=null) { document.getElementById('dynamic-content').className = originalGridClass.replace("hidden", ""); resetSelection(); document.getElementById('dynamic-content').innerHTML = '<div class="col-span-full text-center py-20 text-[#e5a00d]"><i class="fa-solid fa-circle-notch fa-spin text-3xl"></i></div>'; let url = `/api/server/${currentServerId}?section_id=${currentSectionId}&sort_field=${document.getElementById('sortField').value}&sort_dir=${document.getElementById('sortDir').value}`; if(parentKey) url += `&parent_key=${parentKey}`; const res = await fetch(url); const data = await res.json(); allCurrentKeys = data.data.map(i => i.key); document.getElementById('btn-select-all').classList.remove('hidden'); data.data.forEach(i => window.itemsCache[i.key] = i); document.getElementById('dynamic-content').innerHTML = data.data.map(i => renderCard(i, null)).join(''); }
+        function browseShow(srv, key) { if(srv && srv!==currentServerId) { currentServerId=srv; } reloadLibrary(key); }
+        async function handleSearch(e) {
+            if (e.key === 'Enter') {
+                const query = document.getElementById('searchInput').value;
+                const container = document.getElementById('dynamic-content');
+                container.innerHTML = '<div class="col-span-full text-center py-20 text-[#3b82f6]"><i class="fa-solid fa-circle-notch fa-spin text-3xl"></i></div>';
+                try {
+                    const res = await fetch(`/api/server/${currentServerId}/search?section_id=${currentSectionId}&query=${encodeURIComponent(query)}`);
+                    const data = await res.json();
+                    data.data.forEach(i => window.itemsCache[i.key] = i);
+
+                    if (data.data.length === 0) {
+                        container.innerHTML = '<div class="col-span-full text-center text-gray-500 py-20">Aucun résultat trouvé.</div>';
+                    } else {
+                        container.innerHTML = data.data.map(i => renderCard(i, null)).join('');
+                    }
+                } catch (e) {
+                    showToast("Error", "error");
+                }
+            }
+        }     
+        async function playVideo(e, serverId, key) { e.stopPropagation(); const modal = document.getElementById('video-modal'); const video = document.getElementById('video-player'); const res = await fetch(`/api/server/${serverId}/direct_link?media_key=${key}&stream=true`); const data = await res.json(); video.src = data.url; modal.classList.remove('hidden'); }
+        function closeVideo() { const modal = document.getElementById('video-modal'); const video = document.getElementById('video-player'); video.pause(); video.src = ""; modal.classList.add('hidden'); }
+document.addEventListener('click', function(e) { 
+    if(e.target.closest('.poster-card') && !e.target.closest('.action-btn')) { 
+        const card = e.target.closest('.poster-card'); 
+        // --- CORRECTION : VÉRIFICATION DE SÉCURITÉ ---
+        // Si la carte n'a pas d'ID (comme les cartes Wawa), on arrête tout.
+        if (!card.id || card.id === "") return; 
+        
+        const parts = card.id.split('-'); 
+        // Sécurité supplémentaire
+        if (parts.length < 2) return;
+
+        const key = parts[parts.length-1]; 
+        toggleSelection(card, key); 
+    } 
+});
+
+function toggleSelection(card, key) { 
+    const check = card.querySelector('.check-circle'); 
+    // Si pas de rond de sélection (cas Wawa), on sort sans planter
+    if(!check) return; 
+
+    if(selectedKeys.has(key)) { 
+        selectedKeys.delete(key); 
+        card.classList.remove('selected-card'); 
+        check.classList.add('hidden'); 
+    } else { 
+        selectedKeys.add(key); 
+        card.classList.add('selected-card'); 
+        check.classList.remove('hidden'); 
+    } 
+    updateFab(); 
+}
+async function downloadOne(e, serverId, key) { e.stopPropagation(); fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({server_id:serverId, media_key:key})}); showToast("Added to queue"); }
+        function selectAll() { let add = selectedKeys.size < allCurrentKeys.length; if(add) allCurrentKeys.forEach(k => { selectedKeys.add(k); document.getElementById(`card-${k}`)?.classList.add('selected-card'); document.getElementById(`card-${k}`)?.querySelector('.check-circle').classList.remove('hidden'); }); else resetSelection(); updateFab(); }
+        function resetSelection() { selectedKeys.clear(); document.querySelectorAll('.selected-card').forEach(el => { el.classList.remove('selected-card'); el.querySelector('.check-circle').classList.add('hidden'); }); updateFab(); }
+        async function downloadSelected() { if(!selectedKeys.size) return; showToast(`Queued ${selectedKeys.size} items`); for(let k of selectedKeys) fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({server_id:currentServerId, media_key:k})}); setTimeout(()=>{showToast("Added"); resetSelection(); showPage('downloads');},1000); }
+        async function controlQueue(action) { await fetch(`/api/downloads/${action}`, {method: 'POST'}); updateDownloads(); }
+        async function controlItem(id, action) { await fetch(`/api/download/${id}/${action}`, {method: 'POST'}); updateDownloads(); }
+        async function updateDownloads() { const res = await fetch('/api/downloads'); const data = await res.json(); const list = document.getElementById('download-list'); if(!Object.keys(data.active).length) { list.innerHTML = '<div class="text-center text-gray-500 py-10 italic">No activity.</div>'; return; } list.innerHTML = Object.entries(data.active).map(([id, d]) => { let btns = `<button onclick="controlItem('${id}', 'delete')" class="text-gray-400 hover:text-white transition ml-3"><i class="fa-solid fa-trash"></i></button>`; if(d.status==='Downloading'||d.status==='Pending') btns = `<button onclick="controlItem('${id}', 'cancel')" class="text-gray-400 hover:text-red-500 transition"><i class="fa-solid fa-stop"></i></button>` + btns; else if(d.status==='Cancelled'||d.status==='Error') btns = `<button onclick="controlItem('${id}', 'retry')" class="text-gray-400 hover:text-green-500 transition"><i class="fa-solid fa-rotate-right"></i></button>` + btns; return `<div class="bg-[#282a2d] p-3 rounded border border-[#ffffff05] grid grid-cols-12 items-center gap-4 hover:border-[#ffffff10] transition"><div class="col-span-5 flex items-center gap-3"><div class="w-10 h-14 bg-black bg-cover bg-center rounded flex-shrink-0" style="background-image: url('${d.thumb||''}');"></div><div class="min-w-0"><div class="font-bold text-sm text-white truncate" title="${d.title}">${d.title}</div><div class="text-xs text-[#e5a00d] flex items-center gap-1"><i class="fa-solid fa-bolt"></i> ${d.source||'Unknown'}</div></div></div><div class="col-span-2"><span class="text-[10px] font-bold uppercase tracking-wider ${d.status==='Error'?'text-red-500':(d.status==='Finished'?'text-green-500':(d.status==='Downloading'?'text-[#e5a00d]':(d.status==='Cancelled'?'text-gray-500':'text-blue-400')))}">${d.status}</span></div><div class="col-span-3"><div class="bg-[#1f2326] h-1.5 rounded-full overflow-hidden border border-[#ffffff10]"><div class="${d.status==='Finished'?'bg-green-500':(d.status==='Error'||d.status==='Cancelled'?'bg-red-900':'bg-[#e5a00d]')} h-full transition-all duration-300" style="width: ${d.progress}%"></div></div></div><div class="col-span-2 flex justify-end items-center pr-2">${btns}</div></div>`}).join(''); }
+        setInterval(() => { if(!document.getElementById('page-downloads').classList.contains('hidden')) updateDownloads(); }, 1000);
+        setInterval(updateStorage, 30000); 
+        async function openConnModal(serverId) { document.getElementById('conn-modal').classList.remove('hidden'); document.getElementById('conn-list').innerHTML = 'Scanning...'; const res = await fetch(`/api/server/${serverId}/connections`); const conns = await res.json(); document.getElementById('conn-list').innerHTML = conns.map(c => `<div onclick="setConnection('${serverId}', '${c.uri}')" class="p-3 rounded bg-[#1f2326] border border-[#ffffff10] hover:border-[#e5a00d] cursor-pointer flex justify-between items-center transition"><div><div class="font-mono text-xs text-[#ccc] mb-1">${c.uri}</div><div class="text-xs text-gray-500">${c.local?'LAN':'Remote'} • ${c.address}</div></div></div>`).join(''); }
+        async function setConnection(id, uri) { await fetch('/api/server/connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({server_id:id, uri:uri})}); closeModal(); showToast("Updated"); if(document.getElementById('page-recent').classList.contains('hidden') === false) loadGlobalDashboard(); else loadServers(); }
+        function closeModal() { document.getElementById('conn-modal').classList.add('hidden'); }
+        async function loadTmdb() {
+            const container = document.getElementById('tmdb-content');
+            container.innerHTML = '<div class="text-center py-20"><i class="fa-solid fa-circle-notch fa-spin text-3xl text-[#01b4e4]"></i></div>';
+            
+            try {
+                const res = await fetch('/api/tmdb');
+                const data = await res.json();
+                
+                if (data.status === 'error') {
+                    container.innerHTML = `<div class="text-center py-20 text-gray-400"><i class="fa-solid fa-triangle-exclamation text-4xl mb-4 text-[#e5a00d]"></i><br>TMDB API key missing in .env</div>`;
+                    return;
+                }
+
+                container.innerHTML = '';
+                renderTmdbSection(container, 'Future releases', data.upcoming);
+                renderTmdbSection(container, 'Weekly trends', data.trending);
+                renderTmdbSection(container, 'Popular', data.popular);
+
+            } catch(e) { container.innerHTML = '<div class="text-red-500 text-center">Erreur TMDB</div>'; }
+        }
+
+        function renderTmdbSection(container, title, items) {
+            if (!items || !items.length) return;
+            const html = `
+            <div class="mb-8">
+                <h3 class="text-xl font-bold text-white mb-4 pl-1 border-l-4 border-[#01b4e4] ml-2">&nbsp;${title}</h3>
+                <div class="tmdb-section px-2">
+                    ${items.map(m => `
+                        <div class="tmdb-card" onclick="openTmdbInfo('${m.title.replace(/'/g, "\\'")}', '${m.overview.replace(/'/g, "\\'")}', '${m.poster_path}', '${m.release_date}')">
+                            <img src="https://image.tmdb.org/t/p/w300${m.poster_path}" class="tmdb-img">
+                            <div class="tmdb-date">${m.release_date ? m.release_date.split('-')[0] : 'N/A'}</div>
+                            <div class="text-xs font-bold mt-2 truncate text-gray-300">${m.title}</div>
+                        </div>`).join('')}
+                </div>
+            </div>`;
+            container.innerHTML += html;
+        }
+
+async function loadWawa() {
+    const container = document.getElementById('wawa-container');
+    
+    // Loader (English)
+    container.innerHTML = `
+        <div class="flex flex-col items-center justify-center py-32 text-purple-500 animate-pulse">
+            <i class="fa-solid fa-satellite-dish text-5xl mb-4"></i>
+            <div class="text-sm font-bold uppercase tracking-widest">Scanning Frequency...</div>
+        </div>`;
+    
+    try {
+        const res = await fetch('/api/wawa/latest');
+        const json = await res.json();
+        const data = json.data;
+
+        container.innerHTML = '';
+
+        // Sections (English Titles)
+        const sections = [
+            { key: 'movies', title: 'Latest Blu-Ray Movies', icon: 'fa-film' },
+            { key: 'series', title: 'TV Shows (French HQ)', icon: 'fa-tv' },
+            { key: 'mangas', title: 'Anime / Manga (VOSTFR)', icon: 'fa-book-journal-whills' }
+        ];
+
+        let hasContent = false;
+
+        sections.forEach(section => {
+            const items = data[section.key] || [];
+            
+            if (items.length > 0) {
+                hasContent = true;
+                
+                const sectionHTML = `
+                <div class="animate-fade-in">
+                    <div class="flex items-center gap-3 mb-5 pl-2 border-l-4 border-purple-500">
+                        <i class="fa-solid ${section.icon} text-purple-400 text-lg"></i>
+                        <h3 class="text-xl font-bold text-white">${section.title}</h3>
+                        <span class="text-xs font-bold text-gray-500 bg-[#282a2d] px-2 py-0.5 rounded border border-white/5">${items.length}</span>
+                    </div>
+
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4">
+                        ${items.map(m => renderWawaCard(m, section.key)).join('')}
+                    </div>
+                </div>`;
+                
+                container.innerHTML += sectionHTML;
+            }
+        });
+
+        if (!hasContent) {
+            container.innerHTML = '<div class="text-center text-gray-500 py-20">WawaCity seems unreachable or empty.</div>';
+        }
+        
+    } catch(e) {
+        console.error(e);
+        container.innerHTML = `
+            <div class="text-center py-20">
+                <div class="text-red-500 text-4xl mb-2"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                <div class="text-gray-400">Connection error to scraper.</div>
+            </div>`;
+    }
+}
+
+function renderWawaCard(m, type) {
+    // English Badges
+    let typeBadge = '';
+    if(type === 'series') typeBadge = 'TV SHOW';
+    else if(type === 'mangas') typeBadge = 'ANIME';
+    else typeBadge = 'MOVIE';
+
+    // DIRECT LINK: window.open(m.link, '_blank')
+    return `
+    <div class="poster-card group relative bg-[#282a2d] aspect-[2/3] rounded overflow-hidden cursor-pointer border border-white/5 hover:border-purple-500 transition-all duration-300 shadow-lg hover:shadow-purple-500/20" 
+            onclick="window.open('${m.link}', '_blank')">
+        
+        <div class="w-full h-full bg-cover bg-center transition duration-500 group-hover:scale-110 opacity-80 group-hover:opacity-100" 
+                style="background-image: url('${m.thumb}');"></div>
+        
+        <div class="absolute top-2 right-2 bg-purple-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-lg border border-white/10 z-10">
+            ${m.quality}
+        </div>
+        
+        <div class="absolute top-2 left-2 bg-black/60 text-white text-[9px] font-bold px-1.5 py-0.5 rounded border border-white/10 z-10 backdrop-blur-md">
+            ${typeBadge}
+        </div>
+
+        <div class="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black via-black/90 to-transparent flex flex-col justify-end p-3">
+            <div class="font-bold text-xs text-white leading-tight line-clamp-2 mb-1" title="${m.title}">${m.title}</div>
+            <div class="flex justify-between items-center">
+                <div class="text-[10px] text-purple-400 font-bold">${m.year}</div>
+                <div class="text-[10px] text-gray-500 flex items-center gap-1"><i class="fa-solid fa-arrow-up-right-from-square"></i> OPEN</div>
+            </div>
+        </div>
+        
+        <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm z-20">
+            <div class="transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 flex flex-col items-center gap-2">
+                <i class="fa-solid fa-magnet text-3xl text-purple-400 drop-shadow-lg"></i>
+                <span class="text-white text-[10px] font-bold uppercase tracking-wider">Go to Wawa</span>
+            </div>
+        </div>
+    </div>`;
+}
+
+// La fonction getWawaLink reste la même que précédemment
+
+        async function getWawaLink(url, title) {
+            showToast(`Link redirection for ${title}...`);
+            try {
+                const res = await fetch('/api/wawa/link', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({url: url})
+                });
+                const data = await res.json();
+                
+                if(data.status === 'success') {
+                    // On ouvre le lien dans un nouvel onglet
+                    window.open(data.link, '_blank');
+                    showToast("Lien ouvert !", "success");
+                } else {
+                    showToast("No 1fichier link", "error");
+                }
+            } catch(e) {
+                showToast("Erreur réseau", "error");
+            }
+        }
+        function openTmdbInfo(title, overview, poster, date) {
+            document.getElementById('info-title').innerText = title;
+            document.getElementById('info-year').innerText = date || '';
+            document.getElementById('info-res').innerText = 'TMDB';
+            document.getElementById('info-size').innerText = '';
+            document.getElementById('info-summary').innerText = overview || "Pas de description.";
+            document.getElementById('info-thumb').src = poster ? `https://image.tmdb.org/t/p/w500${poster}` : '';
+            document.getElementById('info-dl-btn').parentElement.style.display = 'none';
+            document.getElementById('info-modal').classList.remove('hidden');
+                        document.getElementById('info-modal').onclick = (e) => { 
+                if(e.target.id === 'info-modal') {
+                    closeInfo(); 
+                    setTimeout(() => document.getElementById('info-dl-btn').parentElement.style.display = 'flex', 300);
+                }
+            };
+        }
+
+        showPage('servers');
+        updateStorage();
+
+
+    </script>
+</body>
+</html>

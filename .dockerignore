@@ -1,0 +1,14 @@
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+.env
+venv
+.vscode
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+./downloads/
+./img/
