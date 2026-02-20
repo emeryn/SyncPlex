@@ -3,7 +3,7 @@
 # ⚡ SYNCPLEX
 
 
-**SYNCPLEX** is a streamlined, self-hosted web application designed to browse, search, and download media from any Plex server shared with you. It replicates the premium Plex experience while adding powerful download management capabilities.
+**SYNCPLEX** is a streamlined, self-hosted web application designed to browse, search, and download media from any Plex server shared with you.
 
 
 <p align="center"><img src="img/SCREEN1.png" alt="SCREEN1" width="85%"/></p>
@@ -133,7 +133,7 @@ A new browser tab will open filled with code. **You don't need to read the code.
 * **Never share your token.** It grants full access to your Plex account without a password. 
 * If you think your token has been compromised, **changing your Plex password** will invalidate all existing tokens and generate new ones.
 * Only use for your own Plex or educational purpose
-* **DO NOT INSTALL** this service on public vps or cloud provider. Your plex token will be exposed 
+* **DO NOT INSTALL** this service on public VPSs or cloud providers. Your Plex token will be exposed 
 
 
 ## 📚 API & Documentation
