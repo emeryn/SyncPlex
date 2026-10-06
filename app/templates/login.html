@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in · {{ app_name }}</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link href="/static/css/app.css?v={{ version }}" rel="stylesheet">
+</head>
+<body>
+    <main class="login">
+        <div class="login-card">
+            <img src="/static/logo.png" alt="">
+            <h1><span class="c-blue">SYNC</span><span class="c-plex">PLEX</span></h1>
+            <p class="lead">Browse and sync media from the Plex servers shared with you.</p>
+
+            <button id="login-btn" class="btn btn-primary btn-lg btn-block">
+                <i class="fa-solid fa-right-to-bracket"></i><span>Sign in with Plex</span>
+            </button>
+            <p id="login-status" class="login-status" role="status"></p>
+
+            <p class="login-note">You will be redirected to plex.tv to approve access.<br>Your Plex password is never shared with SyncPlex.</p>
+        </div>
+    </main>
+    <script src="/static/js/login.js?v={{ version }}"></script>
+</body>
+</html>

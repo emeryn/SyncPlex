@@ -1,86 +1,90 @@
+"""Browse and delete files inside the download directory."""
 import os
 import shutil
+from pathlib import Path
 
-DOWNLOAD_DIR = "/downloads"
+import config
+
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".wmv", ".webm"}
+
+
+class FileError(Exception):
+    pass
+
+
+def _resolve(rel_path):
+    """Map a relative path to an absolute one, refusing anything outside the download directory."""
+    root = config.DOWNLOAD_DIR.resolve()
+    target = (root / (rel_path or "").lstrip("/\\")).resolve()
+    if target != root and root not in target.parents:
+        raise FileError("Path outside of the download directory")
+    return root, target
+
+
+def _dir_size(path):
+    total = 0
+    for dirpath, _, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                pass
+    return total
+
 
 def list_directory(rel_path=""):
-    """Liste le contenu du dossier de téléchargement"""
-    if ".." in rel_path or rel_path.startswith("/"):
-        rel_path = ""
-        
-    abs_path = os.path.join(DOWNLOAD_DIR, rel_path)
-    
-    if not os.path.exists(abs_path):
-        return []
+    root, target = _resolve(rel_path)
+    if not target.is_dir():
+        return {"path": "", "items": []}
 
     items = []
-    try:
-        for entry in os.scandir(abs_path):
-            size = entry.stat().st_size
-            ftype = "file"
-            if entry.is_dir():
-                ftype = "folder"
-            elif entry.name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
-                ftype = "video"
-            
-            items.append({
-                "name": entry.name,
-                "type": ftype,
-                "size": size,
-                "path": os.path.join(rel_path, entry.name),
-                "rel_path": os.path.join(rel_path, entry.name)
-            })
-    except Exception as e:
-        print(f"Error scanning directory: {e}")
-        
-    return items
+    for entry in os.scandir(target):
+        try:
+            is_dir = entry.is_dir()
+            stat = entry.stat()
+        except OSError:
+            continue
+        if is_dir:
+            kind = "folder"
+        elif Path(entry.name).suffix.lower() in VIDEO_EXTENSIONS:
+            kind = "video"
+        elif entry.name.endswith(".part"):
+            kind = "partial"
+        else:
+            kind = "file"
+        items.append({
+            "name": entry.name,
+            "type": kind,
+            "size": _dir_size(entry.path) if is_dir else stat.st_size,
+            "modified": stat.st_mtime,
+            "path": Path(entry.path).relative_to(root).as_posix(),
+        })
+    return {"path": target.relative_to(root).as_posix() if target != root else "", "items": items}
+
 
 def delete_items(paths):
-    """Supprime fichiers/dossiers"""
-    deleted_count = 0
-    for p in paths:
-        if ".." in p or p.startswith("/"): continue
-        abs_path = os.path.join(DOWNLOAD_DIR, p)
+    deleted = 0
+    for rel_path in paths:
         try:
-            if os.path.isfile(abs_path): os.remove(abs_path)
-            elif os.path.isdir(abs_path): shutil.rmtree(abs_path)
-            deleted_count += 1
-        except: pass
-    return {"status": "ok", "deleted": deleted_count}
+            root, target = _resolve(rel_path)
+        except FileError:
+            continue
+        if target == root:
+            continue
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            else:
+                continue
+            deleted += 1
+        except OSError:
+            pass
+    return {"deleted": deleted}
 
-def parse_plex_item(item):
-    director = "Unknown"
-    try:
-        if hasattr(item, 'directors') and item.directors:
-            director = ", ".join([d.tag for d in item.directors])
-    except: pass
 
-    cast = []
-    try:
-        if hasattr(item, 'roles') and item.roles:
-            cast = [r.tag for r in item.roles[:5]]
-    except: pass
-    rating = "N/A"
-    try:
-        val = getattr(item, 'rating', None)
-        if val:
-            rating = f"{float(val):.1f}"
-    except: pass
-
-    summary = getattr(item, 'summary', "No description available.")
-    if not summary: summary = "No description available."
-
-    return {
-        "key": item.ratingKey,
-        "title": item.title,
-        "type": item.type,
-        "year": getattr(item, 'year', None),
-        "thumb": getattr(item, 'thumbUrl', None),
-        "summary": summary,
-        "rating": rating,
-        "director": director,
-        "cast": cast,
-        "addedAt": item.addedAt.timestamp() if hasattr(item, 'addedAt') and item.addedAt else 0,
-        "resolution": item.media[0].videoResolution if (hasattr(item, 'media') and item.media) else None,
-        "size": item.media[0].parts[0].size if (hasattr(item, 'media') and item.media and item.media[0].parts) else 0,
-    }
+def storage():
+    path = config.DOWNLOAD_DIR if config.DOWNLOAD_DIR.exists() else Path("/")
+    total, used, free = shutil.disk_usage(path)
+    return {"total": total, "used": used, "free": free, "percent": round(used * 100 / total) if total else 0}

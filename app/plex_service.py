@@ -1,246 +1,442 @@
-from plexapi.myplex import MyPlexAccount
-from plexapi import CONFIG
-from plexapi.server import PlexServer
-import requests
-import os
-import json
+"""Thin client for plex.tv and Plex Media Server APIs."""
+import logging
+import re
+import threading
+import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from urllib.parse import quote
 
-if 'headers' not in CONFIG.data: CONFIG.data['headers'] = {}
-CONFIG.data['headers']['X-Plex-Client-Identifier'] = 'PlexThunderSync-Docker-ID'
-CONFIG.data['headers']['X-Plex-Product'] = 'SYNCPLEX'
-CONFIG.data['headers']['X-Plex-Version'] = '3.5'
+import httpx
 
-PLEX_TOKEN = os.getenv("PLEX_TOKEN")
-PLEX_USER = os.getenv("PLEX_USER")
-PLEX_PASSWORD = os.getenv("PLEX_PASSWORD")
+import config
 
-_account_cache = None
-_forced_connections = {} 
+log = logging.getLogger("syncplex.plex")
 
-def get_plex_account():
-    global _account_cache
-    if _account_cache: return _account_cache
-    if PLEX_TOKEN: _account_cache = MyPlexAccount(token=PLEX_TOKEN)
-    elif PLEX_USER and PLEX_PASSWORD: _account_cache = MyPlexAccount(PLEX_USER, PLEX_PASSWORD)
-    else: raise Exception("Missing Credentials")
-    return _account_cache
+RESOURCES_TTL = 300
+CONNECTION_TTL = 1800
+PROBE_TIMEOUT = 4
+
+SORT_FIELDS = {
+    "addedAt": "addedAt",
+    "title": "titleSort",
+    "year": "year",
+    "released": "originallyAvailableAt",
+    "rating": "audienceRating",
+}
+
+http = httpx.Client(
+    headers=config.PLEX_HEADERS,
+    timeout=15,
+    follow_redirects=True,
+    transport=httpx.HTTPTransport(retries=2),
+)
+
+_resources_cache: dict[str, tuple[float, list]] = {}
+_connections: dict[str, tuple[float, str]] = {}
+_forced_connections: dict[str, str] = {}
+_probe_locks = defaultdict(threading.Lock)
 
 
-def get_base_url_and_token(client_identifier):
-    account = get_plex_account()
-    res = account.resource(client_identifier)
-    token = res.accessToken
-    if client_identifier in _forced_connections: return _forced_connections[client_identifier], token
-    for conn in res.connections:
-        try:
-            requests.get(conn.uri, headers={'X-Plex-Token': token}, timeout=2)
-            uri = conn.uri
-            if not uri.endswith('/'): uri += '/'
-            _forced_connections[client_identifier] = uri
-            return uri, token
-        except: continue
-    raise Exception("No valid connection found.")
+class PlexError(Exception):
+    def __init__(self, message, status=502):
+        super().__init__(message)
+        self.status = status
 
-def list_server_connections(client_identifier):
-    account = get_plex_account()
-    res = account.resource(client_identifier)
-    return [{"uri": c.uri, "local": c.local, "address": c.address} for c in res.connections]
 
-def set_preferred_connection(client_identifier, uri):
-    if not uri.endswith('/'): uri += '/'
-    _forced_connections[client_identifier] = uri
-    return {"status": "ok"}
+class PlexAuthError(PlexError):
+    def __init__(self, message="Your Plex session has expired, please sign in again"):
+        super().__init__(message, 401)
 
-def extract_languages(item):
-    languages = set()
-    file_path = ""
-    if 'Media' in item:
-        for media in item['Media']:
-            for part in media.get('Part', []):
-                file_path = part.get('file', '').upper()
-    if file_path:
-        if 'MULTI' in file_path: languages.add('MULTI')
-        if any(x in file_path for x in ['TRUEFRENCH', 'VFF', 'FRENCH', 'VFQ']):
-            languages.add('FRA')
-        if 'VOSTFR' in file_path: languages.add('VOST')
-        if 'ENGLISH' in file_path: languages.add('ENG')
-    
-    return list(languages) if languages else ["FRA"] 
 
-def fetch_json(base_url, token, endpoint):
-    url = f"{base_url}{endpoint}"
+@dataclass
+class Server:
+    id: str
+    name: str
+    uri: str
+    token: str
 
-    if endpoint.startswith('/') and base_url.endswith('/'): url = f"{base_url}{endpoint[1:]}"
-    headers = {'X-Plex-Token': token, 'Accept': 'application/json'}
-    params = {'includeDetails': 1, 'includeStreams': 1}
-    r = requests.get(url, headers=headers, params=params, timeout=10)
+
+# ---------------------------------------------------------------- plex.tv
+
+def get_resources(token, refresh=False):
+    cached = _resources_cache.get(token)
+    if cached and not refresh and time.time() - cached[0] < RESOURCES_TTL:
+        return cached[1]
+    try:
+        r = http.get(
+            "https://clients.plex.tv/api/v2/resources",
+            params={"includeHttps": 1, "includeRelay": 1},
+            headers={"X-Plex-Token": token},
+        )
+    except httpx.HTTPError as e:
+        raise PlexError(f"Could not reach plex.tv: {e}")
+    if r.status_code == 401:
+        raise PlexAuthError()
     r.raise_for_status()
-    data = r.json()
-    return data
+    resources = [res for res in r.json() if "server" in (res.get("provides") or "")]
+    _resources_cache[token] = (time.time(), resources)
+    return resources
 
-def get_real_file_url(client_identifier, rating_key):
-    base_url, token = get_base_url_and_token(client_identifier)
-    if not base_url.endswith('/'): base_url += '/'
-    
-    account = get_plex_account()
-    server_name = account.resource(client_identifier).name
 
-    data = fetch_json(base_url, token, f"library/metadata/{rating_key}")
-    metadata = data['MediaContainer']['Metadata'][0]
-    
-    if 'Media' not in metadata: raise Exception("Not a file (Directory)")
+def _get_resource(token, server_id):
+    for refresh in (False, True):
+        for res in get_resources(token, refresh=refresh):
+            if res["clientIdentifier"] == server_id:
+                return res
+    raise PlexError("Server not found on your Plex account", 404)
 
-    part = metadata['Media'][0]['Part'][0]
-    part_key = part['key']
-    if not part_key.startswith('/'): part_key = '/' + part_key
-    
-    clean_base = base_url.rstrip('/')
-    final_url = f"{clean_base}{part_key}?X-Plex-Token={token}"
-    
-    title = metadata.get('title', 'Unknown')
-    series = metadata.get('grandparentTitle')
-    season = metadata.get('parentIndex')
-    episode = metadata.get('index')
-    ext = part.get('container', 'mkv')
-    
-    media_type = 'episode' if series else 'movie'
 
-    if series:
-        s_str = str(season).zfill(2)
-        e_str = str(episode).zfill(2)
-        filename = f"{series} - S{s_str}E{e_str} - {title}.{ext}"
-    else:
-        year = metadata.get('year', '')
-        filename = f"{title} ({year}).{ext}"
-        
-    filename = "".join([c for c in filename if c.isalpha() or c.isdigit() or c in ' .()-_']).strip()
-    
+def list_servers(token):
+    servers = []
+    for res in get_resources(token):
+        sid = res["clientIdentifier"]
+        cached = _connections.get(sid)
+        servers.append({
+            "id": sid,
+            "name": res.get("name", "Plex"),
+            "owned": bool(res.get("owned")),
+            "owner": "You" if res.get("owned") else (res.get("sourceTitle") or "Shared"),
+            "online": bool(res.get("presence")),
+            "version": res.get("productVersion", ""),
+            "connection": _forced_connections.get(sid) or (cached[1] if cached else None),
+            "forced": sid in _forced_connections,
+        })
+    servers.sort(key=lambda s: (not s["owned"], not s["online"], s["name"].lower()))
+    return servers
+
+
+# ---------------------------------------------------------------- connections
+
+def _connection_rank(conn):
+    if conn.get("relay"):
+        return 2
+    return 0 if conn.get("local") else 1
+
+
+def _probe(uri, server_token, server_id):
+    """A connection is valid only if it answers as the expected server (LAN IPs can collide)."""
+    try:
+        r = http.get(f"{uri.rstrip('/')}/identity", headers={"X-Plex-Token": server_token}, timeout=PROBE_TIMEOUT)
+        return r.status_code == 200 and r.json()["MediaContainer"].get("machineIdentifier") == server_id
+    except Exception:
+        return False
+
+
+def _resolve_uri(res):
+    sid = res["clientIdentifier"]
+    if sid in _forced_connections:
+        return _forced_connections[sid]
+
+    with _probe_locks[sid]:
+        cached = _connections.get(sid)
+        if cached and time.time() - cached[0] < CONNECTION_TTL:
+            return cached[1]
+
+        conns = sorted(res.get("connections") or [], key=_connection_rank)
+        if conns:
+            with ThreadPoolExecutor(max_workers=len(conns)) as pool:
+                results = list(pool.map(lambda c: _probe(c["uri"], res.get("accessToken"), sid), conns))
+            for conn, ok in zip(conns, results):
+                if ok:
+                    uri = conn["uri"].rstrip("/")
+                    _connections[sid] = (time.time(), uri)
+                    log.info("Using %s for server %s", uri, res.get("name"))
+                    return uri
+
+    raise PlexError(f"Server '{res.get('name')}' is unreachable")
+
+
+def connect(token, server_id) -> Server:
+    res = _get_resource(token, server_id)
+    return Server(id=server_id, name=res.get("name", "Plex"), uri=_resolve_uri(res), token=res.get("accessToken") or token)
+
+
+def list_connections(token, server_id):
+    res = _get_resource(token, server_id)
+    cached = _connections.get(server_id)
+    current = _forced_connections.get(server_id) or (cached[1] if cached else None)
     return {
-        "url": final_url, "filename": filename, "title": title,
-        "thumb": f"{clean_base}{metadata.get('thumb','')}?X-Plex-Token={token}",
-        "server_name": server_name,
-        "type": media_type 
+        "forced": server_id in _forced_connections,
+        "connections": [
+            {
+                "uri": c["uri"].rstrip("/"),
+                "address": c.get("address"),
+                "port": c.get("port"),
+                "local": bool(c.get("local")),
+                "relay": bool(c.get("relay")),
+                "active": c["uri"].rstrip("/") == current,
+            }
+            for c in sorted(res.get("connections") or [], key=_connection_rank)
+        ],
     }
 
-def get_server_icon(client_identifier):
+
+def set_connection(token, server_id, uri):
+    """Pin a connection for a server, or go back to automatic detection when uri is empty."""
+    res = _get_resource(token, server_id)
+    _connections.pop(server_id, None)
+    if not uri:
+        _forced_connections.pop(server_id, None)
+        return
+    uri = uri.rstrip("/")
+    # Only accept URIs advertised by plex.tv so the server token is never sent elsewhere.
+    if uri not in {c["uri"].rstrip("/") for c in res.get("connections") or []}:
+        raise PlexError("Unknown connection for this server", 400)
+    _forced_connections[server_id] = uri
+
+
+def server_get(server: Server, path, params=None):
     try:
-        base_url, token = get_base_url_and_token(client_identifier)
-        img_url = f"{base_url.rstrip('/')}/photo/:/resources/server-icon.png?X-Plex-Token={token}&width=150&height=150"
-        r = requests.get(img_url, stream=True, timeout=5)
-        if r.status_code == 200: return r.content
-    except: pass
-    return None
+        r = http.get(f"{server.uri}{path}", params=params, headers={"X-Plex-Token": server.token})
+    except httpx.TransportError as e:
+        _connections.pop(server.id, None)
+        raise PlexError(f"Lost connection to '{server.name}': {e}")
+    if r.status_code == 401:
+        raise PlexError(f"Access denied by '{server.name}'", 403)
+    if r.status_code == 404:
+        raise PlexError("Item not found", 404)
+    r.raise_for_status()
+    return r.json().get("MediaContainer", {})
 
-def extract_media_info(item):
-    size = 0
-    resolution = ''
-    if 'Media' in item:
-        media = item['Media'][0]
-        resolution = media.get('videoResolution', '')
-        if str(resolution).isdigit(): resolution += 'p'
-        if 'Part' in media:
-            size = media['Part'][0].get('size', 0)
-    return size, resolution
 
-def extract_cast(item):
-    """Extrait les 5 premiers acteurs"""
-    cast = []
-    if 'Role' in item:
-        for actor in item['Role'][:5]: 
-            cast.append(actor.get('tag', 'Unknown'))
-    return cast
+# ---------------------------------------------------------------- normalization
 
-def get_server_content(client_identifier, section_id=None, parent_key=None, sort_field='addedAt', sort_dir='desc'):
-    base_url, token = get_base_url_and_token(client_identifier)
-    
-    if section_id == 'recent':
-        endpoint = "library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=10"
-        page_title = "Recently Added"
-    elif section_id is None:
-        data = fetch_json(base_url, token, "library/sections")
-        sections = []
-        for d in data['MediaContainer'].get('Directory', []):
-            if d['type'] in ['movie', 'show']:
-                sections.append({"id": d['key'], "title": d['title'], "type": d['type'], "count": 0})
-        return {"type": "sections", "data": sections}
+_RELEASE_TAGS = [
+    ("MULTI", r"MULTI"),
+    ("FR", r"TRUEFRENCH|FRENCH|VFF|VFQ|VF2"),
+    ("SUB", r"VOSTFR|VOST|SUBBED"),
+    ("HDR", r"HDR10\+?|HDR|DV|DOVI"),
+    ("REMUX", r"REMUX"),
+]
+
+
+def release_tags(file_path):
+    name = PurePosixPath(file_path.replace("\\", "/")).name.upper()
+    return [tag for tag, pattern in _RELEASE_TAGS if re.search(rf"(?<![A-Z0-9])(?:{pattern})(?![A-Z0-9])", name)]
+
+
+def image_url(server_id, path, width=300, height=450):
+    if not path:
+        return ""
+    return f"/api/servers/{server_id}/image?path={quote(path, safe='')}&w={width}&h={height}"
+
+
+def _resolution(media):
+    res = str(media.get("videoResolution") or "")
+    return f"{res}p" if res.isdigit() else res.upper()
+
+
+def _first_media(m):
+    media = (m.get("Media") or [{}])[0]
+    part = (media.get("Part") or [{}])[0]
+    return media, part
+
+
+def normalize(server_id, m):
+    kind = m.get("type")
+    media, part = _first_media(m)
+    poster = m.get("thumb")
+    if kind == "episode":
+        poster = m.get("parentThumb") or m.get("grandparentThumb") or m.get("thumb")
+    elif kind == "season":
+        poster = m.get("thumb") or m.get("parentThumb")
+
+    item = {
+        "key": str(m.get("ratingKey")),
+        "server_id": server_id,
+        "type": kind,
+        "title": m.get("title", ""),
+        "subtitle": "",
+        "year": m.get("year"),
+        "summary": m.get("summary", ""),
+        "thumb": image_url(server_id, poster),
+        "resolution": _resolution(media),
+        "size": part.get("size", 0),
+        "duration": m.get("duration", 0),
+        "added_at": m.get("addedAt", 0),
+        "rating": m.get("audienceRating") or m.get("rating"),
+        "tags": release_tags(part.get("file", "")),
+        "browsable": kind in ("show", "season"),
+        "leaf_count": m.get("leafCount"),
+    }
+
+    if kind == "episode":
+        season, episode = m.get("parentIndex") or 0, m.get("index") or 0
+        item["title"] = f"S{season:02}E{episode:02} · {m.get('title', '')}"
+        item["subtitle"] = m.get("grandparentTitle", "")
+    elif kind == "season":
+        item["subtitle"] = f"{m.get('parentTitle', '')} · {m.get('leafCount', 0)} episodes"
+    elif kind == "show":
+        item["subtitle"] = f"{m.get('childCount', 0)} seasons · {m.get('leafCount', 0)} episodes"
     else:
-        if parent_key:
-            endpoint = f"library/metadata/{parent_key}/children"
-            try:
-                fetch_json(base_url, token, endpoint)
-                endpoint = f"library/metadata/{parent_key}/allLeaves"
-            except: pass
-        else:
-            sort_map = {'title': 'titleSort', 'date': 'originallyAvailableAt', 'addedAt': 'addedAt'}
-            real_sort = sort_map.get(sort_field, 'addedAt')
-            endpoint = f"library/sections/{section_id}/all?sort={real_sort}:{sort_dir}&X-Plex-Container-Start=0&X-Plex-Container-Size=100"
+        item["subtitle"] = str(m.get("year") or "")
+    return item
 
-    data = fetch_json(base_url, token, endpoint)
-    container = data['MediaContainer']
-    page_title = container.get('title1', 'Library')
-    entries = container.get('Metadata', [])
-    
+
+# ---------------------------------------------------------------- browsing
+
+def list_libraries(token, server_id):
+    server = connect(token, server_id)
+    mc = server_get(server, "/library/sections")
+    return {
+        "server": server.name,
+        "libraries": [
+            {"id": d["key"], "title": d["title"], "type": d["type"]}
+            for d in mc.get("Directory", [])
+            if d.get("type") in ("movie", "show")
+        ],
+    }
+
+
+def list_library(token, server_id, section_id, sort="addedAt", direction="desc", start=0, size=100, query=""):
+    server = connect(token, server_id)
+    params = {
+        "sort": f"{SORT_FIELDS.get(sort, 'addedAt')}:{'asc' if direction == 'asc' else 'desc'}",
+        "X-Plex-Container-Start": start,
+        "X-Plex-Container-Size": size,
+    }
+    if query:
+        params["title"] = query
+    mc = server_get(server, f"/library/sections/{section_id}/all", params)
+    return {
+        "title": mc.get("librarySectionTitle") or mc.get("title1", ""),
+        "total": mc.get("totalSize", mc.get("size", 0)),
+        "items": [normalize(server_id, m) for m in mc.get("Metadata", [])],
+    }
+
+
+def list_children(token, server_id, key):
+    server = connect(token, server_id)
+    mc = server_get(server, f"/library/metadata/{key}/children")
+    title = " · ".join(t for t in (mc.get("title1"), mc.get("title2")) if t)
+    items = [normalize(server_id, m) for m in mc.get("Metadata", []) if m.get("type") in ("season", "episode")]
+    return {"title": title, "total": len(items), "items": items}
+
+
+def recently_added(token, server_id, size=30):
+    server = connect(token, server_id)
+    mc = server_get(server, "/library/recentlyAdded", {"X-Plex-Container-Start": 0, "X-Plex-Container-Size": size})
+    items = [normalize(server_id, m) for m in mc.get("Metadata", []) if m.get("type") in ("movie", "show", "season", "episode")]
+    for item in items:
+        item["server_name"] = server.name
+    return items
+
+
+def search(token, server_id, query, limit=20):
+    server = connect(token, server_id)
+    mc = server_get(server, "/hubs/search", {"query": query, "limit": limit, "includeCollections": 0})
     items = []
-    for item in entries:
-        thumb = item.get('thumb', '')
-        thumb_url = f"{base_url.rstrip('/')}{thumb}?X-Plex-Token={token}" if thumb else ""
-        
-        display_title = item['title']
-        if item['type'] == 'episode':
-            s = str(item.get('parentIndex', 0)).zfill(2)
-            e = str(item.get('index', 0)).zfill(2)
-            display_title = f"S{s}E{e} - {item['title']}"
+    for hub in mc.get("Hub", []):
+        for m in hub.get("Metadata", []):
+            if m.get("type") in ("movie", "show", "season", "episode"):
+                item = normalize(server_id, m)
+                item["server_name"] = server.name
+                items.append(item)
+    return items
 
-        size, res = extract_media_info(item)
-        cast = extract_cast(item) 
-        langs = extract_languages(item)
-        items.append({
-            "title": display_title,
-            "year": item.get('year', ''),
-            "thumb": thumb_url,
-            "key": item['ratingKey'],
-            "type": item['type'],
-            "summary": item.get('summary', "No summary available.")[:500], 
-            "size": size,
-            "resolution": res,
-            "cast": cast,
-            "languages": langs
-        })
-        
-    return {"type": "items", "data": items, "section_title": page_title}
 
-def search_content(client_identifier, section_id, query):
-    base_url, token = get_base_url_and_token(client_identifier)
-    endpoint = f"library/sections/{section_id}/search?type=1&query={query}"
-    data = fetch_json(base_url, token, endpoint)
-    items = []
-    for item in data['MediaContainer'].get('Metadata', []):
-         size, res = extract_media_info(item)
-         cast = extract_cast(item)
-         langs = extract_languages(item)
-         items.append({
-            "title": item['title'],
-            "year": item.get('year', ''),
-            "thumb": f"{base_url.rstrip('/')}{item.get('thumb','')}?X-Plex-Token={token}",
-            "key": item['ratingKey'],
-            "type": item['type'],
-            "summary": item.get('summary', "")[:500],
-            "size": size,
-            "resolution": res,
-            "cast": cast,
-            "languages": langs
+def _metadata(server, key):
+    items = server_get(server, f"/library/metadata/{key}", {"includeExtras": 0}).get("Metadata")
+    if not items:
+        raise PlexError("Item not found", 404)
+    return items[0]
 
-        })
-    return {"type": "search_results", "data": items, "section_title": f"Search: {query}"}
 
-def get_all_servers():
-    account = get_plex_account()
-    servers = []
-    for r in account.resources():
-        if r.product == 'Plex Media Server':
-            servers.append({
-                "name": r.name, "id": r.clientIdentifier, 
-                "owner": "Me" if r.owned else "Remote",
-                "forced_url": _forced_connections.get(r.clientIdentifier, None)
-            })
-    return servers
+def get_item(token, server_id, key):
+    server = connect(token, server_id)
+    m = _metadata(server, key)
+    item = normalize(server_id, m)
+    media, part = _first_media(m)
+    streams = part.get("Stream", [])
+
+    def languages(stream_type):
+        seen = []
+        for s in streams:
+            if s.get("streamType") == stream_type:
+                lang = s.get("language") or s.get("languageCode") or "Unknown"
+                if lang not in seen:
+                    seen.append(lang)
+        return seen
+
+    poster = m.get("thumb") if m.get("type") != "episode" else (m.get("parentThumb") or m.get("grandparentThumb"))
+    item.update({
+        "server_name": server.name,
+        "poster": image_url(server_id, poster, 500, 750),
+        "cast": [r.get("tag") for r in m.get("Role", [])[:10]],
+        "directors": [d.get("tag") for d in m.get("Director", [])],
+        "genres": [g.get("tag") for g in m.get("Genre", [])],
+        "audio": languages(2),
+        "subtitles": languages(3),
+        "video_codec": (media.get("videoCodec") or "").upper(),
+        "audio_codec": (media.get("audioCodec") or "").upper(),
+        "container": (media.get("container") or "").upper(),
+        "file": PurePosixPath(part.get("file", "").replace("\\", "/")).name,
+        "plex_url": f"https://app.plex.tv/desktop/#!/server/{server_id}/details?key={quote('/library/metadata/' + item['key'], safe='')}",
+    })
+    return item
+
+
+# ---------------------------------------------------------------- downloads
+
+_INVALID_CHARS = re.compile(r'[<>"/\\|?*\x00-\x1f]')
+
+
+def safe_name(value):
+    value = _INVALID_CHARS.sub("", str(value or "").replace(": ", " - ").replace(":", "-"))
+    return value.strip().rstrip(". ") or "Unknown"
+
+
+def expand_keys(token, server_id, key):
+    """Resolve a show or season to its episodes; movies and episodes resolve to themselves."""
+    server = connect(token, server_id)
+    kind = _metadata(server, key).get("type")
+    if kind in ("movie", "episode"):
+        return [str(key)]
+    if kind in ("show", "season"):
+        leaves = server_get(server, f"/library/metadata/{key}/allLeaves")
+        return [str(m["ratingKey"]) for m in leaves.get("Metadata", [])]
+    return []
+
+
+def get_file_info(token, server_id, key):
+    server = connect(token, server_id)
+    m = _metadata(server, key)
+    if m.get("type") not in ("movie", "episode") or not m.get("Media"):
+        raise PlexError("This item is not a downloadable file", 400)
+
+    media, part = _first_media(m)
+    ext = PurePosixPath(part.get("file", "").replace("\\", "/")).suffix.lstrip(".") or part.get("container") or "mkv"
+    title = m.get("title", "Unknown")
+
+    if m["type"] == "episode":
+        show = safe_name(m.get("grandparentTitle"))
+        season, episode = m.get("parentIndex") or 0, m.get("index") or 0
+        rel_path = PurePosixPath("tvshows", show, f"Season {season:02}", f"{show} - S{season:02}E{episode:02} - {safe_name(title)}.{ext}")
+        display = f"{m.get('grandparentTitle')} · S{season:02}E{episode:02}"
+        poster = m.get("parentThumb") or m.get("grandparentThumb")
+    else:
+        year = f" ({m['year']})" if m.get("year") else ""
+        rel_path = PurePosixPath("movies", f"{safe_name(title)}{year}.{ext}")
+        display = f"{title}{year}"
+        poster = m.get("thumb")
+
+    return {
+        "url": f"{server.uri}{part['key']}",
+        "server_token": server.token,
+        "rel_path": str(rel_path),
+        "filename": rel_path.name,
+        "size": part.get("size", 0),
+        "title": display,
+        "thumb": image_url(server_id, poster, 120, 180),
+        "server_name": server.name,
+    }
+
+
+def image_target(token, server_id, path, width, height):
+    """URL and token used by the image proxy to fetch a resized poster from the server."""
+    server = connect(token, server_id)
+    params = {"url": path, "width": width, "height": height, "minSize": 1, "upscale": 1}
+    return f"{server.uri}/photo/:/transcode", params, server.token

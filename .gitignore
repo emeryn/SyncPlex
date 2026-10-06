@@ -1,2 +1,6 @@
 .env
 downloads/*
+config/
+__pycache__/
+*.pyc
+sessions.json

@@ -1,12 +1,14 @@
 services:
   syncplex:
+    image: emeryn/syncplex:latest
     build: .
     container_name: syncplex
     ports:
       - "8000:8000"
     volumes:
-      - ./downloads:/downloads  
-      #  Or if you want to bind your plex folders directly
+      - ./config:/config        # sessions and Plex client identifier
+      - ./downloads:/downloads
+      # Or bind your Plex folders directly:
       #- /data/plex/movies/:/downloads/movies
       #- /data/plex/tvshows/:/downloads/tvshows
     env_file: .env
